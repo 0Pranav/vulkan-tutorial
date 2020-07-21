@@ -26,8 +26,8 @@
 #include <array>
 #include <chrono>
 
-constexpr uint32_t WIDTH = 1440;
-constexpr uint32_t HEIGHT = 1440;
+constexpr uint32_t WIDTH	= 800;
+constexpr uint32_t HEIGHT	= 800;
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 size_t currentFrame = 0;
 
@@ -516,6 +516,7 @@ private:
 
 		VkPhysicalDeviceFeatures deviceFeatures{};
 		deviceFeatures.samplerAnisotropy = VK_TRUE;
+		deviceFeatures.sampleRateShading = VK_TRUE;
 
 		VkDeviceCreateInfo deviceCreateInfo{};
 		deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -824,7 +825,7 @@ private:
 
 		VkPipelineMultisampleStateCreateInfo multisampling{};
 		multisampling.sType =					VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-		multisampling.sampleShadingEnable =		VK_FALSE;
+		multisampling.sampleShadingEnable =		VK_TRUE;
 		multisampling.rasterizationSamples =	m_MsaaSamples;
 		multisampling.minSampleShading =		1.0f; // Optional
 		multisampling.pSampleMask =				nullptr; // Optional
@@ -884,11 +885,11 @@ private:
 
 
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-		pipelineLayoutInfo.sType =					VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipelineLayoutInfo.setLayoutCount =			1; // Optional
-		pipelineLayoutInfo.pSetLayouts =			&m_DescriptorSetLayout; // Optional
-		pipelineLayoutInfo.pushConstantRangeCount = 0; // Optional
-		pipelineLayoutInfo.pPushConstantRanges =	nullptr; // Optional
+		pipelineLayoutInfo.sType					= VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+		pipelineLayoutInfo.setLayoutCount			= 1; // Optional
+		pipelineLayoutInfo.pSetLayouts				= &m_DescriptorSetLayout; // Optional
+		pipelineLayoutInfo.pushConstantRangeCount	= 0; // Optional
+		pipelineLayoutInfo.pPushConstantRanges		= nullptr; // Optional
 
 		if (vkCreatePipelineLayout(m_Device, &pipelineLayoutInfo, nullptr, &m_PipelineLayout) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create pipeline layout!");
@@ -1757,6 +1758,7 @@ private:
 			result == VK_SUBOPTIMAL_KHR ||
 			m_FramebufferResized) 
 		{
+			m_FramebufferResized = false;
 			RecreateSwapchain();
 		}
 		else if (result != VK_SUCCESS) 
