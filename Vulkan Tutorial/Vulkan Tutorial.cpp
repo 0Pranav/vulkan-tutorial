@@ -206,7 +206,7 @@ private:
 		CreateUniformBuffers();
 		CreateDescriptorPool();
 		CreateDescriptorSets();
-		CreateCommandBuffers();
+		//CreateCommandBuffers();
 		CreateSemaphores();
 	}
 
@@ -567,7 +567,7 @@ private:
 		CreateUniformBuffers();
 		CreateDescriptorPool();
 		CreateDescriptorSets();
-		CreateCommandBuffers();
+		//CreateCommandBuffers();
 	}
 
 	void CreateSwapchain()
@@ -883,13 +883,17 @@ private:
 		depthStencil.front = {}; // Optional
 		depthStencil.back= {}; // Optional
 
+		VkPushConstantRange vpcr{};
+		vpcr.offset = 0;
+		vpcr.size = sizeof(glm::vec4);
+		vpcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
 		pipelineLayoutInfo.sType					= VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutInfo.setLayoutCount			= 1; // Optional
 		pipelineLayoutInfo.pSetLayouts				= &m_DescriptorSetLayout; // Optional
-		pipelineLayoutInfo.pushConstantRangeCount	= 0; // Optional
-		pipelineLayoutInfo.pPushConstantRanges		= nullptr; // Optional
+		pipelineLayoutInfo.pushConstantRangeCount	= 1; // Optional
+		pipelineLayoutInfo.pPushConstantRanges		= &vpcr; // Optional
 
 		if (vkCreatePipelineLayout(m_Device, &pipelineLayoutInfo, nullptr, &m_PipelineLayout) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create pipeline layout!");
@@ -1571,35 +1575,32 @@ private:
 
 		throw std::runtime_error("failed to find suitable memory type!");
 	}
-	void CreateCommandBuffers()
+	VkCommandBuffer CreateCommandBuffers(int currentImage)
 	{
-		m_CommandBuffers.resize(m_SwapchainFramebuffers.size());
+		VkCommandBuffer buffer{};
 		VkCommandBufferAllocateInfo allocInfo{};
 		allocInfo.sType					= VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 		allocInfo.commandPool			= m_CommandPool;
 		allocInfo.level					= VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		allocInfo.commandBufferCount	= (uint32_t)m_CommandBuffers.size();
+		allocInfo.commandBufferCount	= 1;
 
-		if (vkAllocateCommandBuffers(m_Device, &allocInfo, m_CommandBuffers.data()) != VK_SUCCESS) {
+		if (vkAllocateCommandBuffers(m_Device, &allocInfo, &buffer) != VK_SUCCESS) {
 			throw std::runtime_error("failed to allocate command buffers!");
 		}
 
-		for (size_t i = 0; i < m_CommandBuffers.size(); i++) {
 			VkCommandBufferBeginInfo beginInfo{};
 			beginInfo.sType				= VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 			beginInfo.flags				= 0; // Optional
 			beginInfo.pInheritanceInfo	= nullptr; // Optional
 
-			if (vkBeginCommandBuffer(m_CommandBuffers[i], &beginInfo) != VK_SUCCESS) {
+			if (vkBeginCommandBuffer(buffer, &beginInfo) != VK_SUCCESS) {
 				throw std::runtime_error("failed to begin recording command buffer!");
 			}
 
 			VkRenderPassBeginInfo renderPassInfo{};
 			renderPassInfo.sType		= VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 			renderPassInfo.renderPass	= m_RenderPass;
-			renderPassInfo.framebuffer	= m_SwapchainFramebuffers[i];
-
-
+			renderPassInfo.framebuffer	= m_SwapchainFramebuffers[currentImage];
 
 			renderPassInfo.renderArea.offset = { 0, 0 };
 			renderPassInfo.renderArea.extent = m_Extent;
@@ -1611,24 +1612,26 @@ private:
 			renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
 			renderPassInfo.pClearValues = clearValues.data();
 
-			vkCmdBeginRenderPass(m_CommandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-			vkCmdBindPipeline(m_CommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
+			vkCmdBeginRenderPass(buffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			vkCmdPushConstants(buffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4), &m_TintColor);
+			vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
 
 			VkBuffer buffers[]		= { m_VertexBuffer };
 			VkDeviceSize offsets[]	= { 0 };
-			vkCmdBindVertexBuffers(m_CommandBuffers[i], 0, 1, buffers, offsets);
+			vkCmdBindVertexBuffers(buffer, 0, 1, buffers, offsets);
 
-			vkCmdBindIndexBuffer(m_CommandBuffers[i], m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+			vkCmdBindIndexBuffer(buffer, m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-			vkCmdBindDescriptorSets(m_CommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 1, &m_DescriptorSets[i], 0, nullptr);
+			vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 1, &m_DescriptorSets[currentImage], 0, nullptr);
 
-			vkCmdDrawIndexed(m_CommandBuffers[i], static_cast<uint32_t>(g_Indices.size()), 1, 0, 0, 0);
+			vkCmdDrawIndexed(buffer, static_cast<uint32_t>(g_Indices.size()), 1, 0, 0, 0);
 
-			vkCmdEndRenderPass(m_CommandBuffers[i]);
-			if (vkEndCommandBuffer(m_CommandBuffers[i]) != VK_SUCCESS) {
+			vkCmdEndRenderPass(buffer);
+			if (vkEndCommandBuffer(buffer) != VK_SUCCESS) {
 				throw std::runtime_error("failed to record command buffer!");
 			}
-		}
+
+			return buffer;
 	}
 
 	void CreateSemaphores()
@@ -1727,12 +1730,13 @@ private:
 		VkSemaphore waitSemaphores[]	= { m_ImageAvailableSemaphores[currentFrame] };
 		VkSemaphore signalSemaphores[]	= { m_RenderFinishedSemaphores[currentFrame] };
 
+		VkCommandBuffer commandBuffer = CreateCommandBuffers(imageIndex);
 		VkPipelineStageFlags waitStages[]	= { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 		submitInfo.waitSemaphoreCount		= 1;
 		submitInfo.pWaitSemaphores			= waitSemaphores;
 		submitInfo.pWaitDstStageMask		= waitStages;
 		submitInfo.commandBufferCount		= 1;
-		submitInfo.pCommandBuffers			= &m_CommandBuffers[imageIndex];
+		submitInfo.pCommandBuffers			= &commandBuffer;
 		submitInfo.signalSemaphoreCount		= 1;
 		submitInfo.pSignalSemaphores		= signalSemaphores;
 
@@ -1766,6 +1770,7 @@ private:
 			throw std::runtime_error("failed to present swap chain image!");
 		}
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+		vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &commandBuffer);
 	}
 	
 	void UpdateUniformBuffers(uint32_t currentImage)
@@ -1780,6 +1785,11 @@ private:
 		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		ubo.projection = glm::perspective(glm::radians(45.0f), m_Extent.width / (float) m_Extent.height, 0.1f, 10.0f);
 		ubo.projection[1][1] *= -1;
+
+		m_TintColor.r = sin(time);
+		m_TintColor.g = cos(time);
+		m_TintColor.b = sin(time);
+
 
 		void* data;
 		vkMapMemory(m_Device, m_UniformBufferMemories[currentImage], 0, sizeof(ubo), 0, &data);
@@ -1938,6 +1948,8 @@ private:
 	bool							m_FramebufferResized = false;
 
 	VkSampleCountFlagBits			m_MsaaSamples;
+
+	glm::vec4						m_TintColor = glm::vec4(1.0, 1.0, 0.0, 1.0);
 
 };
 int main() {
