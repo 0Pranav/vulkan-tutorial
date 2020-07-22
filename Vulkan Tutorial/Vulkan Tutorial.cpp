@@ -63,7 +63,7 @@ struct SwapchainSupportDetails {
 struct Vertex
 {
 	glm::vec3 position;
-	glm::vec3 color;
+	glm::vec3 normal;
 	glm::vec2 textureCoords;
 
 	static VkVertexInputBindingDescription GetBindingDescription()
@@ -90,7 +90,7 @@ struct Vertex
 		colorAttribute.binding	= 0;
 		colorAttribute.location = 1;
 		colorAttribute.format	= VK_FORMAT_R32G32B32_SFLOAT;
-		colorAttribute.offset	= offsetof(Vertex, color);
+		colorAttribute.offset	= offsetof(Vertex, normal);
 		result[1] = colorAttribute;
 
 		VkVertexInputAttributeDescription textureCoordAttribute{};
@@ -103,7 +103,7 @@ struct Vertex
 	}
 
 	bool operator==(const Vertex& other) const {
-		return position == other.position && color == other.color && textureCoords == other.textureCoords;
+		return position == other.position && normal == other.normal && textureCoords == other.textureCoords;
 	}
 };
 
@@ -111,7 +111,7 @@ namespace std {
 	template<> struct hash<Vertex> {
 		size_t operator()(Vertex const& vertex) const {
 			return ((hash<glm::vec3>()(vertex.position) ^
-				(hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+				(hash<glm::vec3>()(vertex.normal) << 1)) >> 1) ^
 				(hash<glm::vec2>()(vertex.textureCoords) << 1);
 		}
 	};
@@ -128,8 +128,8 @@ std::vector<Vertex> g_Vertices;
 std::unordered_map<Vertex, uint32_t> g_UniqueVertices{};
 std::vector<uint32_t> g_Indices;
 
-const std::string MODEL_PATH = "models/viking_room.obj";
-const std::string TEXTURE_PATH = "textures/viking_room.png";
+const std::string MODEL_PATH = "models/backpack.obj";
+const std::string TEXTURE_PATH = "textures/diffuse.jpg";
 
 
 
@@ -894,8 +894,8 @@ private:
 		pipelineLayoutInfo.sType					= VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutInfo.setLayoutCount			= 1; // Optional
 		pipelineLayoutInfo.pSetLayouts				= &m_DescriptorSetLayout; // Optional
-		pipelineLayoutInfo.pushConstantRangeCount	= 1; // Optional
-		pipelineLayoutInfo.pPushConstantRanges		= &vpcr; // Optional
+		pipelineLayoutInfo.pushConstantRangeCount	= 0; // Optional
+		pipelineLayoutInfo.pPushConstantRanges		= nullptr; // Optional
 
 		if (vkCreatePipelineLayout(m_Device, &pipelineLayoutInfo, nullptr, &m_PipelineLayout) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create pipeline layout!");
@@ -1018,7 +1018,7 @@ private:
 	void CreateTextureImage()
 	{
 		int texWidth, texHeight, texChannels;
-		stbi_uc* pixels = stbi_load("textures/viking_room.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 		VkDeviceSize imageSize = static_cast<uint64_t>(texWidth) * static_cast<uint64_t>(texHeight) * 4; // casting to uint64_t to make sure there's no loss of data during multiplication
 
 		m_MipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texHeight, texWidth))));
@@ -1248,10 +1248,14 @@ private:
 
 				vertex.textureCoords = {
 					attrib.texcoords[2 * index.texcoord_index + 0],
-					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+					attrib.texcoords[2 * index.texcoord_index + 1]
 				};
 
-				vertex.color = { 1.0f, 1.0f, 1.0f };
+				vertex.normal = { 
+					attrib.normals[3 * index.normal_index + 0],
+					attrib.normals[3 * index.normal_index + 1],
+					attrib.normals[3 * index.normal_index + 2],
+				};
 
 				if (g_UniqueVertices.count(vertex) == 0) {
 					g_UniqueVertices[vertex] = static_cast<uint32_t>(g_Vertices.size());
@@ -1617,7 +1621,6 @@ private:
 			renderPassInfo.pClearValues = clearValues.data();
 
 			vkCmdBeginRenderPass(m_CommandBuffers[currentImage], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-			vkCmdPushConstants(m_CommandBuffers[currentImage], m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4), &m_TintColor);
 			vkCmdBindPipeline(m_CommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
 
 			VkBuffer buffers[]		= { m_VertexBuffer };
@@ -1781,15 +1784,10 @@ private:
 		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
 		UniformBufferObject ubo{};
-		ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 		ubo.projection = glm::perspective(glm::radians(45.0f), m_Extent.width / (float) m_Extent.height, 0.1f, 10.0f);
 		ubo.projection[1][1] *= -1;
-
-		m_TintColor.r = sin(time);
-		m_TintColor.g = cos(time);
-		m_TintColor.b = sin(time);
-
 
 		void* data;
 		vkMapMemory(m_Device, m_UniformBufferMemories[currentImage], 0, sizeof(ubo), 0, &data);
