@@ -15,6 +15,8 @@ layout(location = 0) out vec3 v_FragColor;
 layout(location = 1) out vec2 v_TexCoords;
 layout(location = 2) out vec4 v_TintColor;
 
+const vec3 DELTA = vec3(0.5);
+
 
 
 layout (push_constant) uniform color {
@@ -22,7 +24,9 @@ layout (push_constant) uniform color {
 } tc;
 
 void main() {
-    gl_Position = ubo.position  * ubo.view * ubo.model * vec4(a_Pos, 1.0);
+    vec3 vectorDelta = gl_InstanceIndex * DELTA;
+    vec3 position = a_Pos + vectorDelta;
+    gl_Position = ubo.position  * ubo.view * ubo.model * vec4(position, 1.0);
     v_FragColor = a_Color;
     v_TexCoords = a_TexCoords;
     v_TintColor = tc.pc_TintColor;

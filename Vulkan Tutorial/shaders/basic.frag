@@ -12,5 +12,6 @@ layout (binding = 1) uniform sampler2D texSampler;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    outColor = tintColor * texture(texSampler, fragTexCoord);
+    vec4 adjustedTintColor = (tintColor / 2) + 0.5;
+    outColor = (adjustedTintColor) * texture(texSampler, fragTexCoord);
 }

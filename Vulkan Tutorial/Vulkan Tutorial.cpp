@@ -207,6 +207,7 @@ private:
 		CreateDescriptorPool();
 		CreateDescriptorSets();
 		//CreateCommandBuffers();
+		AllocateCommandBuffers();
 		CreateSemaphores();
 	}
 
@@ -568,6 +569,7 @@ private:
 		CreateDescriptorPool();
 		CreateDescriptorSets();
 		//CreateCommandBuffers();
+		AllocateCommandBuffers();
 	}
 
 	void CreateSwapchain()
@@ -962,7 +964,7 @@ private:
 		poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 		poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
 
-		poolInfo.flags = 0;
+		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
 		if (vkCreateCommandPool(m_Device, &poolInfo, nullptr, &m_CommandPool) != VK_SUCCESS) {
 			throw std::runtime_error("failed to create command pool!");
@@ -1021,10 +1023,8 @@ private:
 
 		m_MipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texHeight, texWidth))));
 
-		if (stbi_failure_reason())
-			std::cout << stbi_failure_reason();
-
 		if (!pixels) {
+			std::cout << stbi_failure_reason() << std::endl;
 			throw std::runtime_error("failed to load texture image!");
 		}
 
@@ -1575,25 +1575,29 @@ private:
 
 		throw std::runtime_error("failed to find suitable memory type!");
 	}
-	VkCommandBuffer CreateCommandBuffers(int currentImage)
-	{
-		VkCommandBuffer buffer{};
-		VkCommandBufferAllocateInfo allocInfo{};
-		allocInfo.sType					= VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		allocInfo.commandPool			= m_CommandPool;
-		allocInfo.level					= VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		allocInfo.commandBufferCount	= 1;
 
-		if (vkAllocateCommandBuffers(m_Device, &allocInfo, &buffer) != VK_SUCCESS) {
+	void AllocateCommandBuffers()
+	{
+		m_CommandBuffers.resize(m_SwapchainImages.size());
+		VkCommandBufferAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocInfo.commandPool = m_CommandPool;
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandBufferCount = m_SwapchainImages.size();
+
+		if (vkAllocateCommandBuffers(m_Device, &allocInfo, m_CommandBuffers.data()) != VK_SUCCESS) {
 			throw std::runtime_error("failed to allocate command buffers!");
 		}
+	}
 
+	void RecordCommandBuffers(int currentImage)
+	{
 			VkCommandBufferBeginInfo beginInfo{};
 			beginInfo.sType				= VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 			beginInfo.flags				= 0; // Optional
 			beginInfo.pInheritanceInfo	= nullptr; // Optional
 
-			if (vkBeginCommandBuffer(buffer, &beginInfo) != VK_SUCCESS) {
+			if (vkBeginCommandBuffer(m_CommandBuffers[currentImage], &beginInfo) != VK_SUCCESS) {
 				throw std::runtime_error("failed to begin recording command buffer!");
 			}
 
@@ -1612,26 +1616,24 @@ private:
 			renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
 			renderPassInfo.pClearValues = clearValues.data();
 
-			vkCmdBeginRenderPass(buffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-			vkCmdPushConstants(buffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4), &m_TintColor);
-			vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
+			vkCmdBeginRenderPass(m_CommandBuffers[currentImage], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			vkCmdPushConstants(m_CommandBuffers[currentImage], m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4), &m_TintColor);
+			vkCmdBindPipeline(m_CommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
 
 			VkBuffer buffers[]		= { m_VertexBuffer };
 			VkDeviceSize offsets[]	= { 0 };
-			vkCmdBindVertexBuffers(buffer, 0, 1, buffers, offsets);
+			vkCmdBindVertexBuffers(m_CommandBuffers[currentImage], 0, 1, buffers, offsets);
 
-			vkCmdBindIndexBuffer(buffer, m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+			vkCmdBindIndexBuffer(m_CommandBuffers[currentImage], m_IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-			vkCmdBindDescriptorSets(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 1, &m_DescriptorSets[currentImage], 0, nullptr);
+			vkCmdBindDescriptorSets(m_CommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 1, &m_DescriptorSets[currentImage], 0, nullptr);
 
-			vkCmdDrawIndexed(buffer, static_cast<uint32_t>(g_Indices.size()), 1, 0, 0, 0);
+			vkCmdDrawIndexed(m_CommandBuffers[currentImage], static_cast<uint32_t>(g_Indices.size()), 1, 0, 0, 0);
 
-			vkCmdEndRenderPass(buffer);
-			if (vkEndCommandBuffer(buffer) != VK_SUCCESS) {
+			vkCmdEndRenderPass(m_CommandBuffers[currentImage]);
+			if (vkEndCommandBuffer(m_CommandBuffers[currentImage]) != VK_SUCCESS) {
 				throw std::runtime_error("failed to record command buffer!");
 			}
-
-			return buffer;
 	}
 
 	void CreateSemaphores()
@@ -1729,14 +1731,13 @@ private:
 
 		VkSemaphore waitSemaphores[]	= { m_ImageAvailableSemaphores[currentFrame] };
 		VkSemaphore signalSemaphores[]	= { m_RenderFinishedSemaphores[currentFrame] };
-
-		VkCommandBuffer commandBuffer = CreateCommandBuffers(imageIndex);
+		RecordCommandBuffers(imageIndex);
 		VkPipelineStageFlags waitStages[]	= { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 		submitInfo.waitSemaphoreCount		= 1;
 		submitInfo.pWaitSemaphores			= waitSemaphores;
 		submitInfo.pWaitDstStageMask		= waitStages;
 		submitInfo.commandBufferCount		= 1;
-		submitInfo.pCommandBuffers			= &commandBuffer;
+		submitInfo.pCommandBuffers			= &m_CommandBuffers[imageIndex];
 		submitInfo.signalSemaphoreCount		= 1;
 		submitInfo.pSignalSemaphores		= signalSemaphores;
 
@@ -1770,7 +1771,6 @@ private:
 			throw std::runtime_error("failed to present swap chain image!");
 		}
 		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-		vkFreeCommandBuffers(m_Device, m_CommandPool, 1, &commandBuffer);
 	}
 	
 	void UpdateUniformBuffers(uint32_t currentImage)
@@ -1949,7 +1949,7 @@ private:
 
 	VkSampleCountFlagBits			m_MsaaSamples;
 
-	glm::vec4						m_TintColor = glm::vec4(1.0, 1.0, 0.0, 1.0);
+	glm::vec4						m_TintColor = glm::vec4(1.0, 1.0, 1.0, 1.0);
 
 };
 int main() {
