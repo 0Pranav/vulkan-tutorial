@@ -107,6 +107,16 @@ struct Vertex
 	}
 };
 
+struct Camera
+{
+	glm::vec3 position	= glm::vec3(2.0f, 2.0f, 2.0f);
+	glm::vec3 front		= glm::vec3(0.0f, 0.0f, -1.0f);
+	glm::vec3 up		= glm::vec3(0.0f, 1.0f, 0.0f);
+	float speed			= 10.0;
+	float yaw			= 0.0;
+	float pitch			= 0.0;
+};
+
 namespace std {
 	template<> struct hash<Vertex> {
 		size_t operator()(Vertex const& vertex) const {
@@ -169,11 +179,20 @@ private:
 		glfwInit();
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+			
 		m_Window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", NULL, NULL);
+		glfwSetInputMode(m_Window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+		
 		glfwSetWindowUserPointer(m_Window, this);
+		glfwSetCursorPosCallback(m_Window, MouseCallback);
 		glfwSetFramebufferSizeCallback(m_Window, FramebufferResizeCallback);
 	}
 
+	static void MouseCallback(GLFWwindow* window, double x, double y)
+	{
+		auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+		app->ProcessMouseMovement(x, y);
+	}
 
 	static void FramebufferResizeCallback(GLFWwindow* window, int width, int height)
 	{
@@ -1701,9 +1720,58 @@ private:
 		while (!glfwWindowShouldClose(m_Window))
 		{
 			glfwPollEvents();
+			ProcessInput();
 			DrawFrame();
 		}
 		vkDeviceWaitIdle(m_Device);
+	}
+	
+	void ProcessInput()
+	{
+		float currentFrame = glfwGetTime();
+		m_DeltaTime = currentFrame - m_LastFrame;
+		m_LastFrame = currentFrame;
+		if (glfwGetKey(m_Window, GLFW_KEY_W) == GLFW_PRESS)
+			m_Camera.position += (m_DeltaTime * m_Camera.speed * m_Camera.front);
+		if (glfwGetKey(m_Window, GLFW_KEY_S) == GLFW_PRESS)
+			m_Camera.position -= (m_DeltaTime * m_Camera.speed * m_Camera.front);
+		if (glfwGetKey(m_Window, GLFW_KEY_A) == GLFW_PRESS)
+			m_Camera.position -= m_DeltaTime * m_Camera.speed * glm::normalize(glm::cross(m_Camera.front, m_Camera.up));
+		if (glfwGetKey(m_Window, GLFW_KEY_D) == GLFW_PRESS)
+			m_Camera.position += m_DeltaTime * m_Camera.speed * glm::normalize(glm::cross(m_Camera.front, m_Camera.up));
+	}
+
+	void ProcessMouseMovement(double xpos, double ypos)
+	{
+		if (m_FirstMouse)
+		{
+			m_LastX = xpos;
+			m_LastY = ypos;
+			m_FirstMouse = false;
+		}
+
+		float xoffset = xpos - m_LastX;
+		float yoffset = m_LastY - ypos;
+		m_LastX = xpos;
+		m_LastY = ypos;
+
+		float sensitivity = 0.1f;
+		xoffset *= sensitivity;
+		yoffset *= sensitivity;
+
+		m_Camera.yaw += xoffset;
+		m_Camera.pitch += yoffset;
+
+		if (m_Camera.pitch > 89.0f)
+			m_Camera.pitch = 89.0f;
+		if (m_Camera.pitch < -89.0f)
+			m_Camera.pitch = -89.0f;
+
+		glm::vec3 direction;
+		direction.x = cos(glm::radians(m_Camera.yaw)) * cos(glm::radians(m_Camera.pitch));
+		direction.y = sin(glm::radians(m_Camera.pitch));
+		direction.z = sin(glm::radians(m_Camera.yaw)) * cos(glm::radians(m_Camera.pitch));
+		m_Camera.front = glm::normalize(direction);
 	}
 
 	void DrawFrame()
@@ -1784,9 +1852,11 @@ private:
 		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
 		UniformBufferObject ubo{};
-		ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-		ubo.projection = glm::perspective(glm::radians(45.0f), m_Extent.width / (float) m_Extent.height, 0.1f, 10.0f);
+		ubo.model = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
+		glm::vec3 lookAt = m_Camera.front + m_Camera.position;
+		ubo.view = glm::lookAt(m_Camera.position,  lookAt, m_Camera.up);
+		std::cout << "Look at" << lookAt.x << "," << lookAt.y << "," << lookAt.z << std::endl;
+		ubo.projection = glm::perspective(glm::radians(45.0f), m_Extent.width / (float) m_Extent.height, 0.1f, 100.0f);
 		ubo.projection[1][1] *= -1;
 
 		void* data;
@@ -1948,6 +2018,11 @@ private:
 	VkSampleCountFlagBits			m_MsaaSamples;
 
 	glm::vec4						m_TintColor = glm::vec4(1.0, 1.0, 1.0, 1.0);
+
+	Camera							m_Camera{};
+	float							m_DeltaTime, m_LastFrame;
+	bool							m_FirstMouse = true;
+	float							m_LastX, m_LastY;
 
 };
 int main() {
