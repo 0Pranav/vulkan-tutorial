@@ -8,15 +8,16 @@ layout (binding = 0) uniform UniformBufferObject {
 } ubo;
 
 layout (location = 0) in vec3 a_Pos;
-layout (location = 1) in vec3 a_Color;
+layout (location = 1) in vec3 a_Normal;
 layout (location = 2) in vec2 a_TexCoords;
 
-layout(location = 0) out vec3 v_FragColor;
+layout(location = 0) out vec3 v_FragNormal;
 layout(location = 1) out vec2 v_TexCoords;
+layout(location = 2) out vec3 v_FragPos;
 
 
 void main() {
-    gl_Position = ubo.position  * ubo.view * ubo.model * vec4(a_Pos, 1.0);
-    v_FragColor = a_Color;
-    v_TexCoords = a_TexCoords;
+    gl_Position  = ubo.position  * ubo.view * ubo.model * vec4(a_Pos, 1.0);
+    v_FragNormal = mat3(transpose(inverse(ubo.model)))  * a_Normal;
+    v_TexCoords  = a_TexCoords;
 }

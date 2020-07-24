@@ -86,12 +86,12 @@ struct Vertex
 		positionAttribute.offset	= offsetof(Vertex, position);
 		result[0] = positionAttribute;
 
-		VkVertexInputAttributeDescription colorAttribute{};
-		colorAttribute.binding	= 0;
-		colorAttribute.location = 1;
-		colorAttribute.format	= VK_FORMAT_R32G32B32_SFLOAT;
-		colorAttribute.offset	= offsetof(Vertex, normal);
-		result[1] = colorAttribute;
+		VkVertexInputAttributeDescription normalAttribute{};
+		normalAttribute.binding	= 0;
+		normalAttribute.location = 1;
+		normalAttribute.format	= VK_FORMAT_R32G32B32_SFLOAT;
+		normalAttribute.offset	= offsetof(Vertex, normal);
+		result[1] = normalAttribute;
 
 		VkVertexInputAttributeDescription textureCoordAttribute{};
 		textureCoordAttribute.binding	= 0;
@@ -117,6 +117,12 @@ struct Camera
 	float pitch			= 0.0;
 };
 
+struct Light
+{
+	glm::vec3 position				= glm::vec3(0.0f, 0.0f, 5.0f);
+	alignas(16) glm::vec3 color		= glm::vec3(1.0f, 1.0f, 1.0f);
+};
+
 namespace std {
 	template<> struct hash<Vertex> {
 		size_t operator()(Vertex const& vertex) const {
@@ -140,6 +146,8 @@ std::vector<uint32_t> g_Indices;
 
 const std::string MODEL_PATH = "models/backpack.obj";
 const std::string TEXTURE_PATH = "textures/diffuse.jpg";
+const std::string SPEC_TEXTURE_PATH = "textures/specular.jpg";
+
 
 
 
@@ -760,7 +768,29 @@ private:
 		samplerBinding.stageFlags			= VK_SHADER_STAGE_FRAGMENT_BIT;
 		samplerBinding.pImmutableSamplers	= nullptr;
 
-		std::array<VkDescriptorSetLayoutBinding, 2> bindings = { uboLayoutBinding, samplerBinding };
+		VkDescriptorSetLayoutBinding lightLayoutBinding{};
+		lightLayoutBinding.binding				= 2;
+		lightLayoutBinding.descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		lightLayoutBinding.descriptorCount		= 1;
+		lightLayoutBinding.stageFlags			= VK_SHADER_STAGE_FRAGMENT_BIT;
+		lightLayoutBinding.pImmutableSamplers	= nullptr;
+
+		VkDescriptorSetLayoutBinding cameraLayoutBinding{};
+		cameraLayoutBinding.binding				= 3;
+		cameraLayoutBinding.descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		cameraLayoutBinding.descriptorCount		= 1;
+		cameraLayoutBinding.stageFlags			= VK_SHADER_STAGE_FRAGMENT_BIT;
+		cameraLayoutBinding.pImmutableSamplers	= nullptr;
+
+		VkDescriptorSetLayoutBinding specularSamplerBinding{};
+		specularSamplerBinding.binding				= 4;
+		specularSamplerBinding.descriptorCount		= 1;
+		specularSamplerBinding.descriptorType		= VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		specularSamplerBinding.stageFlags			= VK_SHADER_STAGE_FRAGMENT_BIT;
+		specularSamplerBinding.pImmutableSamplers	= nullptr;
+
+
+		std::array<VkDescriptorSetLayoutBinding, 5> bindings = { uboLayoutBinding, samplerBinding, lightLayoutBinding, cameraLayoutBinding, specularSamplerBinding };
 
 		VkDescriptorSetLayoutCreateInfo layoutCreateInfo{};
 		layoutCreateInfo.sType			= VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1043,7 +1073,7 @@ private:
 		m_MipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texHeight, texWidth))));
 
 		if (!pixels) {
-			std::cout << stbi_failure_reason() << std::endl;
+			std::cerr << stbi_failure_reason() << std::endl;
 			throw std::runtime_error("failed to load texture image!");
 		}
 
@@ -1066,6 +1096,27 @@ private:
 
 		vkDestroyBuffer(m_Device, stagingBuffer, nullptr);
 		vkFreeMemory(m_Device, stagingBufferMemory, nullptr);
+
+		pixels = stbi_load(SPEC_TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		imageSize = static_cast<uint64_t>(texWidth) * static_cast<uint64_t>(texHeight) * 4;
+
+		if (!pixels) {
+			std::cerr << stbi_failure_reason() << std::endl;
+			throw std::runtime_error("failed to load specular image!");
+		}
+
+		CreateBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+		
+		vkMapMemory(m_Device, stagingBufferMemory, 0, imageSize, 0, &data);
+		memcpy(data, pixels, static_cast<size_t>(imageSize));
+		vkUnmapMemory(m_Device, stagingBufferMemory);
+
+		stbi_image_free(pixels);
+		CreateImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_SpecularImage, m_SpecularImageMemory);
+		TransitionImageLayout(m_SpecularImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
+		CopyBufferToImage(stagingBuffer, m_SpecularImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+		TransitionImageLayout(m_SpecularImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+
 	}
 
 	void GenerateMipmaps(VkImage image,VkFormat imageFormat, uint32_t texWidth, uint32_t texHeight, uint32_t mipLevels)
@@ -1159,6 +1210,7 @@ private:
 	void CreateTextureImageView()
 	{
 		m_TextureImageView = CreateImageView(m_TextureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, m_MipLevels);
+		m_SpecularImageView = CreateImageView(m_SpecularImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 	}
 
 	void CreateTextureSampler()
@@ -1186,7 +1238,30 @@ private:
 			throw std::runtime_error("Could not create texture sampler");
 		}
 
+		samplerInfo.sType					= VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		samplerInfo.magFilter				= VK_FILTER_LINEAR;
+		samplerInfo.minFilter				= VK_FILTER_LINEAR;
+		samplerInfo.addressModeU			= VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.addressModeV			= VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.addressModeW			= VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.borderColor				= VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+		samplerInfo.anisotropyEnable		= VK_TRUE;
+		samplerInfo.maxAnisotropy			= 16.0f;
+		samplerInfo.unnormalizedCoordinates = VK_FALSE;
+		samplerInfo.compareEnable			= VK_FALSE;
+		samplerInfo.compareOp				= VK_COMPARE_OP_ALWAYS;
+		samplerInfo.mipmapMode				= VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerInfo.mipLodBias				= 0.0f;
+		samplerInfo.minLod					= 0.0f;
+		samplerInfo.maxLod					= 0.0f;
+
+		if (vkCreateSampler(m_Device, &samplerInfo, nullptr, &m_SpecularSampler) != VK_SUCCESS)
+		{
+			throw std::runtime_error("Could not create texture sampler");
+		}
+
 	}
+
 	VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t mipLevels)
 	{
 		VkImageViewCreateInfo imageViewCreateInfo{};
@@ -1330,25 +1405,41 @@ private:
 
 	void CreateUniformBuffers()
 	{
-		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-		
-		m_UniformBuffers.resize(m_SwapchainImages.size());
-		m_UniformBufferMemories.resize(m_SwapchainImages.size());
+		VkDeviceSize MVPBufferSize = sizeof(UniformBufferObject);
+		VkDeviceSize lightBufferSize = sizeof(Light);
+		VkDeviceSize cameraBufferSize = sizeof(glm::vec3);
+
+		m_MVPUniformBuffers.resize(m_SwapchainImages.size());
+		m_MVPUniformBufferMemories.resize(m_SwapchainImages.size());
+
+		m_LightUniformBuffers.resize(m_SwapchainImages.size());
+		m_LightUniformBufferMemories.resize(m_SwapchainImages.size());
+
+		m_CameraBuffers.resize(m_SwapchainImages.size());
+		m_CameraBufferMemories.resize(m_SwapchainImages.size());
+
 
 		for (size_t i = 0; i < m_SwapchainImages.size(); i++)
 		{
-			CreateBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_UniformBuffers[i], m_UniformBufferMemories[i]);
-
+			CreateBuffer(MVPBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_MVPUniformBuffers[i], m_MVPUniformBufferMemories[i]);
+			CreateBuffer(lightBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_LightUniformBuffers[i], m_LightUniformBufferMemories[i]);
+			CreateBuffer(cameraBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_CameraBuffers[i], m_CameraBufferMemories[i]);
 		}
 	}
 
 	void CreateDescriptorPool()
 	{
-		std::array<VkDescriptorPoolSize, 2> poolSizes{};
+		std::array<VkDescriptorPoolSize, 5> poolSizes{};
 		poolSizes[0].descriptorCount	= static_cast<uint32_t>(m_SwapchainImages.size());
 		poolSizes[0].type				= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		poolSizes[1].descriptorCount	= static_cast<uint32_t>(m_SwapchainImages.size());
 		poolSizes[1].type				= VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		poolSizes[2].descriptorCount	= static_cast<uint32_t>(m_SwapchainImages.size());
+		poolSizes[2].type				= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSizes[3].descriptorCount	= static_cast<uint32_t>(m_SwapchainImages.size());
+		poolSizes[3].type				= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSizes[4].descriptorCount	= static_cast<uint32_t>(m_SwapchainImages.size());
+		poolSizes[4].type				= VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 
 		VkDescriptorPoolCreateInfo poolInfo{};
 		poolInfo.sType			= VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1375,26 +1466,42 @@ private:
 		if (vkAllocateDescriptorSets(m_Device, &allocInfo, m_DescriptorSets.data()) != VK_SUCCESS) {
 			throw std::runtime_error("failed to allocate descriptor sets!");
 		}
+
 		for (size_t i = 0; i < m_SwapchainImages.size(); i++)
 		{
-			VkDescriptorBufferInfo bufferInfo{};
-			bufferInfo.buffer = m_UniformBuffers[i];
-			bufferInfo.offset = 0;
-			bufferInfo.range = sizeof(UniformBufferObject);
+			VkDescriptorBufferInfo MVPBufferInfo{};
+			MVPBufferInfo.buffer	= m_MVPUniformBuffers[i];
+			MVPBufferInfo.offset	= 0;
+			MVPBufferInfo.range		= sizeof(UniformBufferObject);
 
 			VkDescriptorImageInfo imageInfo{};
-			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			imageInfo.imageView = m_TextureImageView;
-			imageInfo.sampler = m_TextureSampler;
+			imageInfo.imageLayout	= VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			imageInfo.imageView		= m_TextureImageView;
+			imageInfo.sampler		= m_TextureSampler;
 
-			std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+			VkDescriptorBufferInfo lightBufferInfo{};
+			lightBufferInfo.buffer	= m_LightUniformBuffers[i];
+			lightBufferInfo.offset	= 0;
+			lightBufferInfo.range	= sizeof(Light);
+
+			VkDescriptorBufferInfo cameraBufferInfo{};
+			cameraBufferInfo.buffer	= m_LightUniformBuffers[i];
+			cameraBufferInfo.offset	= 0;
+			cameraBufferInfo.range	= sizeof(glm::vec3);
+
+			VkDescriptorImageInfo specularInfo{};
+			specularInfo.imageLayout	= VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			specularInfo.imageView		= m_SpecularImageView;
+			specularInfo.sampler		= m_SpecularSampler;
+
+			std::array<VkWriteDescriptorSet, 5> descriptorWrites{};
 			descriptorWrites[0].sType				= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 			descriptorWrites[0].dstSet				= m_DescriptorSets[i];
 			descriptorWrites[0].dstBinding			= 0;
 			descriptorWrites[0].dstArrayElement		= 0;
 			descriptorWrites[0].descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 			descriptorWrites[0].descriptorCount		= 1;
-			descriptorWrites[0].pBufferInfo			= &bufferInfo;
+			descriptorWrites[0].pBufferInfo			= &MVPBufferInfo;
 
 			descriptorWrites[1].sType				= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 			descriptorWrites[1].dstSet				= m_DescriptorSets[i];
@@ -1403,6 +1510,31 @@ private:
 			descriptorWrites[1].descriptorType		= VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 			descriptorWrites[1].descriptorCount		= 1;
 			descriptorWrites[1].pImageInfo			= &imageInfo;
+
+			descriptorWrites[2].sType				= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[2].dstSet				= m_DescriptorSets[i];
+			descriptorWrites[2].dstBinding			= 2;
+			descriptorWrites[2].dstArrayElement		= 0;
+			descriptorWrites[2].descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[2].descriptorCount		= 1;
+			descriptorWrites[2].pBufferInfo			= &lightBufferInfo;
+
+			descriptorWrites[3].sType				= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[3].dstSet				= m_DescriptorSets[i];
+			descriptorWrites[3].dstBinding			= 3;
+			descriptorWrites[3].dstArrayElement		= 0;
+			descriptorWrites[3].descriptorType		= VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[3].descriptorCount		= 1;
+			descriptorWrites[3].pBufferInfo			= &cameraBufferInfo;
+
+			descriptorWrites[4].sType				= VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[4].dstSet				= m_DescriptorSets[i];
+			descriptorWrites[4].dstBinding			= 4;
+			descriptorWrites[4].dstArrayElement		= 0;
+			descriptorWrites[4].descriptorType		= VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[4].descriptorCount		= 1;
+			descriptorWrites[4].pImageInfo			= &specularInfo;
+
 
 			vkUpdateDescriptorSets(m_Device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 		}
@@ -1739,10 +1871,17 @@ private:
 			m_Camera.position -= m_DeltaTime * m_Camera.speed * glm::normalize(glm::cross(m_Camera.front, m_Camera.up));
 		if (glfwGetKey(m_Window, GLFW_KEY_D) == GLFW_PRESS)
 			m_Camera.position += m_DeltaTime * m_Camera.speed * glm::normalize(glm::cross(m_Camera.front, m_Camera.up));
+		if (glfwGetKey(m_Window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+			m_Paused = !m_Paused;
 	}
 
 	void ProcessMouseMovement(double xpos, double ypos)
 	{
+		if (m_Paused)
+		{
+			return;
+		}
+
 		if (m_FirstMouse)
 		{
 			m_LastX = xpos;
@@ -1855,14 +1994,22 @@ private:
 		ubo.model = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
 		glm::vec3 lookAt = m_Camera.front + m_Camera.position;
 		ubo.view = glm::lookAt(m_Camera.position,  lookAt, m_Camera.up);
-		std::cout << "Look at" << lookAt.x << "," << lookAt.y << "," << lookAt.z << std::endl;
 		ubo.projection = glm::perspective(glm::radians(45.0f), m_Extent.width / (float) m_Extent.height, 0.1f, 100.0f);
 		ubo.projection[1][1] *= -1;
 
 		void* data;
-		vkMapMemory(m_Device, m_UniformBufferMemories[currentImage], 0, sizeof(ubo), 0, &data);
+		vkMapMemory(m_Device, m_MVPUniformBufferMemories[currentImage], 0, sizeof(ubo), 0, &data);
 		memcpy(data, &ubo, sizeof(ubo));
-		vkUnmapMemory(m_Device, m_UniformBufferMemories[currentImage]);
+		vkUnmapMemory(m_Device, m_MVPUniformBufferMemories[currentImage]);
+
+		m_Light.position = { sin(time), cos(time), sin(time) };
+		vkMapMemory(m_Device, m_LightUniformBufferMemories[currentImage], 0, sizeof(Light), 0, &data);
+		memcpy(data, &m_Light, sizeof(Light));
+		vkUnmapMemory(m_Device, m_LightUniformBufferMemories[currentImage]);
+
+		vkMapMemory(m_Device, m_CameraBufferMemories[currentImage], 0, sizeof(glm::vec3), 0, &data);
+		memcpy(data, &m_Camera.position, sizeof(glm::vec3));
+		vkUnmapMemory(m_Device, m_CameraBufferMemories[currentImage]);
 	}
 
 	void CleanupSwapchain()
@@ -1894,8 +2041,10 @@ private:
 		vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr);
 
 		for (size_t i = 0; i < m_SwapchainImages.size(); i++) {
-			vkDestroyBuffer(m_Device, m_UniformBuffers[i], nullptr);
-			vkFreeMemory(m_Device, m_UniformBufferMemories[i], nullptr);
+			vkDestroyBuffer(m_Device, m_LightUniformBuffers[i], nullptr);
+			vkFreeMemory(m_Device, m_LightUniformBufferMemories[i], nullptr);
+			vkDestroyBuffer(m_Device, m_MVPUniformBuffers[i], nullptr);
+			vkFreeMemory(m_Device, m_MVPUniformBufferMemories[i], nullptr);
 		}
 		
 		vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
@@ -1907,9 +2056,17 @@ private:
 		CleanupSwapchain();
 
 		vkDestroySampler(m_Device, m_TextureSampler, nullptr);
+		vkDestroySampler(m_Device, m_SpecularSampler, nullptr);
+
 		vkDestroyImageView(m_Device, m_TextureImageView, nullptr);
+		vkDestroyImageView(m_Device, m_SpecularImageView, nullptr);
+
 		vkDestroyImage(m_Device, m_TextureImage, nullptr);
+		vkDestroyImage(m_Device, m_SpecularImage, nullptr);
+
 		vkFreeMemory(m_Device, m_TextureImageMemory, nullptr);
+		vkFreeMemory(m_Device, m_SpecularImageMemory, nullptr);
+
 		vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout, nullptr);
 		vkDestroyBuffer(m_Device, m_VertexBuffer, nullptr);
 		vkFreeMemory(m_Device, m_VertexBufferMemory, nullptr);
@@ -2006,12 +2163,12 @@ private:
 
 	VkBuffer						m_VertexBuffer, m_IndexBuffer;
 	uint32_t						m_MipLevels;
-	VkImage							m_TextureImage, m_DepthImage, m_ColorImage;
-	VkImageView						m_TextureImageView, m_DepthImageView, m_ColorImageView;
-	VkSampler						m_TextureSampler;
-	VkDeviceMemory					m_VertexBufferMemory, m_IndexBufferMemory, m_TextureImageMemory, m_DepthImageMemory, m_ColorImageMemory;
-	std::vector<VkBuffer>			m_UniformBuffers;
-	std::vector<VkDeviceMemory>		m_UniformBufferMemories;
+	VkImage							m_TextureImage, m_DepthImage, m_ColorImage, m_SpecularImage;
+	VkImageView						m_TextureImageView, m_DepthImageView, m_ColorImageView, m_SpecularImageView;
+	VkSampler						m_TextureSampler, m_SpecularSampler;
+	VkDeviceMemory					m_VertexBufferMemory, m_IndexBufferMemory, m_TextureImageMemory, m_DepthImageMemory, m_ColorImageMemory, m_SpecularImageMemory;
+	std::vector<VkBuffer>			m_MVPUniformBuffers, m_LightUniformBuffers, m_CameraBuffers;
+	std::vector<VkDeviceMemory>		m_MVPUniformBufferMemories, m_LightUniformBufferMemories, m_CameraBufferMemories;
 
 	bool							m_FramebufferResized = false;
 
@@ -2020,8 +2177,9 @@ private:
 	glm::vec4						m_TintColor = glm::vec4(1.0, 1.0, 1.0, 1.0);
 
 	Camera							m_Camera{};
+	Light							m_Light{};
 	float							m_DeltaTime, m_LastFrame;
-	bool							m_FirstMouse = true;
+	bool							m_FirstMouse = true, m_Paused = false;
 	float							m_LastX, m_LastY;
 
 };
