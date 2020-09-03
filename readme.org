@@ -1,0 +1,15 @@
+* Vulkan Playground
+
+This is an extension of the project made on vulkan-tutorial.com.
+
+I've implemented specular and diffuse lighting, push constants and a first person Camera.
+
+I am currently working on another project similar to this which would have better abstractions and controls with DearImGui.
+
+** Building
+
+You can clone this repo using Visual Studio and link the Vulkan, GLFW and glm dependancies. There is currently no makefile.
+
+** Demo
+
+[[./demo/vulkan.gif]]
